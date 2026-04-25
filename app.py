@@ -1,59 +1,77 @@
 import streamlit as st
 from PIL import Image
-import pytesseract
+import easyocr
+import numpy as np
 import re
 
-# Конфигурация на Tesseract (ако си на Windows, посочи пътя до .exe файла)
-# pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+st.set_page_config(page_title="HealthScan AI", layout="centered")
 
-# Примерна база данни с "вредни" съставки
+# --- Инициализация на OCR ---
+# При първото стартиране ще отнеме малко време, за да изтегли моделите (около 100-200MB)
+@st.cache_resource
+def load_ocr():
+    # Задаваме български и английски език
+    return easyocr.Reader(['bg', 'en'], gpu=False)
+
+reader = load_ocr()
+
+# --- БАЗА ДАННИ ---
 BAD_INGREDIENTS = {
-    "aspartame": "Изкуствен подсладител, потенциално вреден за метаболизма.",
-    "palm oil": "Високо съдържание на наситени мазнини, екологични проблеми.",
-    "msg": "Мононатриев глутамат - може да причини главоболие при някои хора.",
-    "high fructose corn syrup": "Свързва се със затлъстяване и диабет.",
-    "e120": "Кармин - оцветител, който може да предизвика алергии.",
-    "sodium nitrite": "Консервант, използван в месата, потенциално канцерогенен.",
-    "trans fats": "Повишават нивата на лошия холестерол."
+    "аспартам": "Изкуствен подсладител; потенциални метаболитни проблеми.",
+    "палмово масло": "Високо съдържание на наситени мазнини.",
+    "глутамат": "Мононатриев глутамат; може да причини главоболие.",
+    "глюкозо-фруктозен сироп": "Свързва се със затлъстяване и диабет.",
+    "е120": "Кармин (оцветител); възможни алергии.",
+    "е171": "Титанов диоксид; забранен в ЕС.",
+    "хидрогенирани": "Трансмазнини; риск от сърдечни заболявания.",
+    "нитрит": "Консервант, потенциално канцерогенен.",
+    "aspartame": "Artificial sweetener; metabolic concerns.",
+    "palm oil": "High saturated fats.",
+    "msg": "Flavor enhancer; can cause headaches."
 }
 
-def analyze_text(text):
-    text = text.lower()
+def analyze_text(results):
+    """Анализира резултатите от EasyOCR."""
     found_bad = {}
+    # EasyOCR връща списък от кортежи (координати, текст, увереност)
+    full_text = " ".join([res[1].lower() for res in results])
     
     for ing, desc in BAD_INGREDIENTS.items():
-        if re.search(r'\b' + re.escape(ing) + r'\b', text):
+        if ing in full_text:
             found_bad[ing] = desc
-            
-    return found_bad
+    return found_bad, full_text
 
-# Streamlit Интерфейс
-st.title("🔍 Анализатор на съставки")
-st.write("Качете снимка на етикета със съставките, за да проверите за вредни добавки.")
+# --- ИНТЕРФЕЙС ---
+st.title("🍎 Скенер за съставки")
+st.write("Снимай етикета и аз ще потърся вредни добавки.")
 
-uploaded_file = st.file_uploader("Изберете снимка...", type=["jpg", "jpeg", "png"])
+uploaded_file = st.file_uploader("Качи снимка...", type=["jpg", "jpeg", "png"])
 
-if uploaded_file is not None:
+if uploaded_file:
     image = Image.open(uploaded_file)
-    st.image(image, caption='Качена снимка', use_column_width=True)
+    st.image(image, caption="Качено изображение", use_container_width=True)
     
-    with st.spinner('Анализиране на текста...'):
-        # Извличане на текст от снимката
-        extracted_text = pytesseract.image_to_string(image, lang='eng+bul') # Поддържа английски и български
-        
-        st.subheader("Извлечен текст:")
-        st.text(extracted_text)
-        
-        # Анализ
-        results = analyze_text(extracted_text)
-        
-        st.divider()
-        
-        if results:
-            st.error(f"Внимание! Открити са {len(results)} потенциално вредни съставки:")
-            for ing, desc in results.items():
-                st.warning(f"**{ing.upper()}**: {desc}")
-        else:
-            st.success("Не са открити известни вредни съставки в нашата база данни.")
+    if st.button("Анализирай"):
+        with st.spinner("Изкуственият интелект чете етикета..."):
+            # Превръщаме снимката във формат, който EasyOCR разбира
+            img_array = np.array(image)
+            
+            # Извличане на текст
+            ocr_results = reader.readtext(img_array)
+            
+            bad_stuff, raw_text = analyze_text(ocr_results)
+            
+            st.divider()
+            
+            if bad_stuff:
+                st.error(f"⚠️ Открити са {len(bad_stuff)} проблемни съставки:")
+                for name, info in bad_stuff.items():
+                    st.warning(f"**{name.upper()}**: {info}")
+            else:
+                st.success("✅ Не открих нищо притеснително в нашия списък.")
+            
+            with st.expander("Виж разчетения текст"):
+                st.write(raw_text)
 
-st.info("Забележка: Тази програма е с образователна цел. Винаги се консултирайте със специалист при специфични диетични нужди.")
+st.markdown("---")
+st.caption("Програмата използва EasyOCR за разпознаване на текст.")
